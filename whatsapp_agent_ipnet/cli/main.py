@@ -11,18 +11,15 @@ Comandos:
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import subprocess
-import sys
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+# deploy e scaffold não dependem de agno/google-genai — import direto é seguro
 from whatsapp_agent_ipnet.cli.deploy import run_deploy
 from whatsapp_agent_ipnet.cli.scaffold import run_init
 
