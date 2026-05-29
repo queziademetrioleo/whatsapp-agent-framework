@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "whatsapp-agent-ipnet"
-version = "0.1.1"
+version = "0.1.2"
 description = "Framework Python para deployar agentes de IA no WhatsApp em menos de 24h"
 readme = "README.md"
 requires-python = ">=3.11"

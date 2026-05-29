@@ -17,13 +17,15 @@ IPNET_EVOLUTION_API_URL=https://evolution.seudominio.com
 IPNET_EVOLUTION_API_KEY=SUA_EVOLUTION_API_KEY_AQUI
 IPNET_INSTANCE_NAME={project_name}
 
-# ─── Banco de Dados ──────────────────────────────────────────────────────────
-# Local:
-IPNET_POSTGRES_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agentdb
-# Cloud SQL via Auth Proxy (Cloud Run):
-# IPNET_POSTGRES_URL=postgresql+asyncpg://postgres:SENHA@localhost:5432/agentdb
+# ─── Banco de Dados (Cloud SQL via Auth Proxy) ───────────────────────────────
+# O host é sempre 127.0.0.1 no Cloud Run (Cloud SQL Auth Proxy roda como sidecar)
+# Preencha com o usuário, senha e nome do banco criados via gcloud CLI
+IPNET_POSTGRES_URL=postgresql+asyncpg://agentuser:SENHA@127.0.0.1:5432/agentdb
 
-IPNET_REDIS_URL=redis://localhost:6379/0
+# ─── Cache de Sessão (Memorystore Redis) ──────────────────────────────────────
+# Use o IP interno retornado pelo comando:
+# gcloud redis instances describe whatsapp-agent-redis --region=us-central1 --format='value(host)'
+IPNET_REDIS_URL=redis://10.x.x.x:6379/0
 
 # ─── Agente ──────────────────────────────────────────────────────────────────
 IPNET_DEBOUNCE_SECONDS=5

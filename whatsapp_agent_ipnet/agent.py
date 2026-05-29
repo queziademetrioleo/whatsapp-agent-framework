@@ -8,7 +8,6 @@ Orquestra todos os componentes:
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, Callable
@@ -42,8 +41,8 @@ class WhatsAppAgent:
             evolution_api_url="https://evolution.meusite.com",
             evolution_api_key="...",
             instance_name="meu-agente",
-            postgres_url="postgresql+asyncpg://user:pass@localhost/db",
-            redis_url="redis://localhost:6379/0",
+            postgres_url="postgresql+asyncpg://agentuser:senha@127.0.0.1:5432/agentdb",
+            redis_url="redis://10.x.x.x:6379/0",
         )
 
         @agent.tool
@@ -67,7 +66,7 @@ class WhatsAppAgent:
         evolution_api_key: str,
         instance_name: str,
         postgres_url: str,
-        redis_url: str = "redis://localhost:6379/0",
+        redis_url: str,
         debounce_seconds: float = 5.0,
         gemini_model: str = "gemini-2.5-flash",
         gemini_temperature: float = 0.7,

@@ -9,13 +9,13 @@ class AgentConfig(BaseSettings):
     Configuração do agente. Pode ser passada diretamente ou via variáveis de ambiente
     com prefixo IPNET_.
 
-    Exemplo de .env:
+    Exemplo de .env (Cloud Run + Cloud SQL + Memorystore):
         IPNET_GEMINI_API_KEY=AIza...
         IPNET_EVOLUTION_API_URL=https://evolution.meusite.com
         IPNET_EVOLUTION_API_KEY=minha-chave
         IPNET_INSTANCE_NAME=meu-agente
-        IPNET_POSTGRES_URL=postgresql+asyncpg://user:pass@localhost/agentdb
-        IPNET_REDIS_URL=redis://localhost:6379/0
+        IPNET_POSTGRES_URL=postgresql+asyncpg://agentuser:senha@127.0.0.1:5432/agentdb
+        IPNET_REDIS_URL=redis://10.x.x.x:6379/0
     """
 
     model_config = SettingsConfigDict(env_prefix="IPNET_", env_file=".env", extra="ignore")
@@ -36,7 +36,7 @@ class AgentConfig(BaseSettings):
         ...,
         description="PostgreSQL connection string. Use asyncpg driver: postgresql+asyncpg://...",
     )
-    redis_url: str = Field("redis://localhost:6379/0", description="Redis connection string")
+    redis_url: str = Field(..., description="Redis URL. No GCP use o IP interno do Memorystore: redis://10.x.x.x:6379/0")
 
     # Comportamento do agente
     debounce_seconds: float = Field(5.0, ge=0.5, le=30.0, description="Janela de debounce em segundos")

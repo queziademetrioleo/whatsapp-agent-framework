@@ -11,7 +11,6 @@ TTL configurável (padrão 1h). Após expirar, a sessão é recriada do históri
 
 from __future__ import annotations
 
-import json
 import logging
 from enum import Enum
 from typing import Any

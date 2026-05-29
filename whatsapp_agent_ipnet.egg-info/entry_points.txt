@@ -1,0 +1,2 @@
+[console_scripts]
+whatsapp-agent = whatsapp_agent_ipnet.cli.main:app
