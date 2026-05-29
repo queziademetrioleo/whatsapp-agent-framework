@@ -104,24 +104,24 @@ Sem o debouncer, o agente responderia 4 vezes, uma para cada mensagem, causando 
 
 ## ✅ O que você vai precisar
 
-Antes de começar, certifique-se de ter acesso a:
-
-| Requisito | Gratuito? | Para que serve |
+| Requisito | Onde fica | Para que serve |
 |-----------|-----------|----------------|
-| Python 3.11+ | ✅ Sim | Linguagem do framework |
-| Redis | ✅ Sim | Memória de sessão ativa |
-| PostgreSQL | ✅ Sim (local) | Histórico de conversas |
-| Google Gemini API Key | ✅ Tem plano grátis | O cérebro do agente (IA) |
-| Evolution API | ⚠️ Self-hosted | Conectar ao WhatsApp |
-| Um número de WhatsApp | ✅ Já tem | Para o agente operar |
+| Python 3.11+ | Sua máquina local | Escrever e testar o agente |
+| Google Cloud Project | GCP | Onde tudo roda em produção |
+| Google Gemini API Key | Google AI Studio | O cérebro do agente (IA) |
+| Cloud SQL (PostgreSQL) | GCP — via gcloud CLI | Histórico de conversas |
+| Memorystore (Redis) | GCP — via gcloud CLI | Sessões ativas em memória |
+| Cloud Run | GCP — via gcloud CLI | Servidor do agente |
+| Evolution API | VPS ou serviço externo | Conectar ao WhatsApp |
+| Um número de WhatsApp | Seu chip | Para o agente operar |
 
-> **Nota sobre o Evolution API:** É uma plataforma open-source que você hospeda no seu próprio servidor, ou pode contratar hospedagem de terceiros. Veja mais em [evolution-api.com](https://evolution-api.com).
+> **Toda a infraestrutura de banco, cache e servidor fica no GCP.** Você não instala Redis nem PostgreSQL na sua máquina — apenas o Python para escrever o código.
 
 ---
 
-## 🚀 Instalação passo a passo
+## 🚀 Configuração passo a passo
 
-### 1. Instalar o Python
+### 1. Instalar o Python (na sua máquina)
 
 O framework requer **Python 3.11 ou superior**.
 
@@ -139,107 +139,227 @@ python3 --version
 
 ---
 
-### 2. Instalar o Redis
+### 2. Instalar o gcloud CLI (na sua máquina)
 
-O Redis é um banco de dados em memória usado para guardar o estado das sessões ativas (conversas em andamento).
+O `gcloud` é a ferramenta de linha de comando do Google Cloud. Todos os comandos de infraestrutura são executados por ela.
 
 **macOS:**
 ```bash
-brew install redis
-brew services start redis   # inicia o Redis automaticamente
+brew install --cask google-cloud-sdk
 ```
 
-**Ubuntu/Debian:**
+**Linux:**
 ```bash
-sudo apt update
-sudo apt install redis-server
-sudo systemctl start redis
-sudo systemctl enable redis  # inicia automaticamente com o sistema
+curl https://sdk.cloud.google.com | bash
+exec -l $SHELL   # recarrega o terminal
 ```
 
-**Windows:**
-Use o WSL (Windows Subsystem for Linux) com Ubuntu, ou use o Docker:
+**Windows:** Baixe o instalador em [cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install)
+
+**Autenticar e configurar o projeto:**
 ```bash
-docker run -d -p 6379:6379 --name redis redis:alpine
+gcloud auth login
+# Abre o navegador para login com sua conta Google
+
+gcloud config set project SEU_PROJECT_ID
+# Substitua SEU_PROJECT_ID pelo ID do seu projeto no GCP
+# Ex: gcloud config set project minha-empresa-prod
 ```
 
-**Verificar se está funcionando:**
+> Não sabe o Project ID? Acesse [console.cloud.google.com](https://console.cloud.google.com) e ele aparece no topo da página.
+
+---
+
+### 3. Ativar as APIs necessárias no GCP
+
+Execute este bloco de uma vez. Cada API habilita um serviço diferente:
+
 ```bash
-redis-cli ping
-# Deve retornar: PONG
+gcloud services enable \
+  sqladmin.googleapis.com \
+  redis.googleapis.com \
+  vpcaccess.googleapis.com \
+  run.googleapis.com \
+  cloudbuild.googleapis.com \
+  secretmanager.googleapis.com \
+  servicenetworking.googleapis.com \
+  compute.googleapis.com
+```
+
+> Isso pode levar alguns minutos. Você só precisa fazer isso uma vez por projeto.
+
+---
+
+### 4. Criar a Service Account (identidade do agente no GCP)
+
+A Service Account é a "identidade" que o Cloud Run usa para acessar os outros serviços do GCP com segurança.
+
+```bash
+# Criar a service account
+gcloud iam service-accounts create whatsapp-agent-sa \
+  --display-name="WhatsApp Agent Service Account"
+
+# Dar permissão para acessar o Cloud SQL
+gcloud projects add-iam-policy-binding SEU_PROJECT_ID \
+  --member="serviceAccount:whatsapp-agent-sa@SEU_PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/cloudsql.client"
+
+# Dar permissão para acessar o Memorystore (Redis)
+gcloud projects add-iam-policy-binding SEU_PROJECT_ID \
+  --member="serviceAccount:whatsapp-agent-sa@SEU_PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/redis.viewer"
+
+# Dar permissão para ler secrets do Secret Manager
+gcloud projects add-iam-policy-binding SEU_PROJECT_ID \
+  --member="serviceAccount:whatsapp-agent-sa@SEU_PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+```
+
+> Substitua `SEU_PROJECT_ID` em todos os comandos pelo seu Project ID real.
+
+---
+
+### 5. Criar o Cloud SQL — PostgreSQL (banco de dados)
+
+O Cloud SQL é o PostgreSQL gerenciado do GCP. Guarda todo o histórico de conversas.
+
+```bash
+# Criar a instância PostgreSQL (leva ~5 minutos)
+gcloud sql instances create whatsapp-agent-db \
+  --database-version=POSTGRES_15 \
+  --tier=db-f1-micro \
+  --region=us-central1 \
+  --storage-type=SSD \
+  --storage-size=10GB \
+  --storage-auto-increase
+
+# Criar o banco de dados dentro da instância
+gcloud sql databases create agentdb \
+  --instance=whatsapp-agent-db
+
+# Criar o usuário do banco com senha
+gcloud sql users create agentuser \
+  --instance=whatsapp-agent-db \
+  --password=TROQUE_POR_UMA_SENHA_FORTE
+
+# Pegar o "connection name" (você vai precisar depois)
+gcloud sql instances describe whatsapp-agent-db \
+  --format='value(connectionName)'
+# Saída: SEU_PROJECT_ID:us-central1:whatsapp-agent-db
+# Guarde esse valor!
+```
+
+> **Tiers disponíveis:**
+> - `db-f1-micro` — ~$7/mês, para desenvolvimento e baixo volume
+> - `db-g1-small` — ~$25/mês, para produção com volume médio
+> - `db-custom-2-8192` — 2 vCPU + 8GB RAM, para alto volume
+
+---
+
+### 6. Criar o Memorystore — Redis (cache de sessão)
+
+O Memorystore é o Redis gerenciado do GCP. Guarda as sessões ativas das conversas em andamento.
+
+> ⚠️ **Importante:** O Memorystore usa **IP interno** (VPC). O Cloud Run precisa de um **VPC Connector** para acessá-lo — veja o passo seguinte.
+
+```bash
+# Criar a instância Redis (leva ~3 minutos)
+gcloud redis instances create whatsapp-agent-redis \
+  --size=1 \
+  --region=us-central1 \
+  --tier=basic \
+  --redis-version=redis_7_0 \
+  --network=projects/SEU_PROJECT_ID/global/networks/default
+
+# Pegar o IP interno do Redis (você vai precisar depois)
+gcloud redis instances describe whatsapp-agent-redis \
+  --region=us-central1 \
+  --format='value(host)'
+# Saída: 10.x.x.x
+# Guarde esse IP!
+```
+
+> O Redis no GCP não tem URL como `redis://localhost` — ele tem um **IP interno** como `10.0.0.27`. A porta é sempre `6379`.
+
+---
+
+### 7. Criar o VPC Connector (ponte entre Cloud Run e Redis)
+
+O Cloud Run roda em ambiente isolado. Para acessar o Memorystore (que está na VPC), precisa de um conector.
+
+```bash
+# Criar o VPC Connector
+gcloud compute networks vpc-access connectors create whatsapp-agent-connector \
+  --region=us-central1 \
+  --network=default \
+  --range=10.8.0.0/28 \
+  --min-instances=2 \
+  --max-instances=10 \
+  --machine-type=e2-micro
+
+# Verificar se foi criado corretamente
+gcloud compute networks vpc-access connectors describe whatsapp-agent-connector \
+  --region=us-central1
+# O campo "state" deve mostrar: READY
+```
+
+> **O que é o `--range=10.8.0.0/28`?** É um bloco de IPs reservado para o conector dentro da sua rede. Certifique-se de que esse range não conflita com outros já usados na sua VPC. Se der erro, tente `10.9.0.0/28`.
+
+---
+
+### 8. Salvar credenciais no Secret Manager
+
+Nunca coloque senhas diretamente em variáveis de ambiente ou código. O Secret Manager do GCP guarda tudo com segurança.
+
+```bash
+# URL do PostgreSQL (usando o IP do Cloud SQL Auth Proxy)
+echo -n "postgresql+asyncpg://agentuser:TROQUE_POR_UMA_SENHA_FORTE@127.0.0.1:5432/agentdb" | \
+  gcloud secrets create ipnet-postgres-url --data-file=-
+
+# URL do Redis (substitua 10.x.x.x pelo IP que você obteve no passo 6)
+echo -n "redis://10.x.x.x:6379/0" | \
+  gcloud secrets create ipnet-redis-url --data-file=-
+
+# Chave do Gemini (obtenha em https://aistudio.google.com/app/apikey)
+echo -n "AIzaSy..." | \
+  gcloud secrets create ipnet-gemini-key --data-file=-
+
+# API Key da Evolution API
+echo -n "sua-api-key-da-evolution" | \
+  gcloud secrets create ipnet-evolution-key --data-file=-
+```
+
+**Dar permissão para a service account ler os secrets:**
+```bash
+for secret in ipnet-postgres-url ipnet-redis-url ipnet-gemini-key ipnet-evolution-key; do
+  gcloud secrets add-iam-policy-binding $secret \
+    --member="serviceAccount:whatsapp-agent-sa@SEU_PROJECT_ID.iam.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor"
+done
 ```
 
 ---
 
-### 3. Instalar o PostgreSQL
+### 9. Configurar a Evolution API
 
-O PostgreSQL guarda o histórico completo de todas as conversas.
+A Evolution API é o intermediário entre seu agente e o WhatsApp. Você precisa de uma instância rodando em algum lugar acessível publicamente (não pode ficar só dentro do GCP sem IP externo).
 
-**macOS:**
+**Opção A — VPS com Docker (recomendado):**
+
+Em qualquer VPS (DigitalOcean, Hetzner, etc.):
 ```bash
-brew install postgresql@15
-brew services start postgresql@15
-# Criar banco de dados:
-createdb agentdb
+docker run -d \
+  --name evolution-api \
+  -p 8080:8080 \
+  -e SERVER_URL=https://SEU_DOMINIO_OU_IP:8080 \
+  -e AUTHENTICATION_API_KEY=TROQUE_POR_KEY_SEGURA \
+  atendai/evolution-api:latest
 ```
 
-**Ubuntu/Debian:**
-```bash
-sudo apt install postgresql postgresql-contrib
-sudo systemctl start postgresql
-# Criar banco de dados:
-sudo -u postgres createdb agentdb
-sudo -u postgres psql -c "CREATE USER agentuser WITH PASSWORD 'suasenha';"
-sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE agentdb TO agentuser;"
-```
+**Opção B — Railway / Render:**
+Consulte a documentação em [doc.evolution-api.com](https://doc.evolution-api.com) para deploy com um clique.
 
-**Windows:**
-Baixe o instalador em [postgresql.org/download/windows](https://www.postgresql.org/download/windows/)
-
-**Verificar se está funcionando:**
-```bash
-psql -U postgres -c "SELECT version();"
-# Deve mostrar a versão do PostgreSQL
-```
-
-> **Atenção:** Anote o usuário, senha e nome do banco. Você vai precisar para configurar o `.env`.
-
----
-
-### 4. Configurar a Evolution API
-
-A Evolution API é o intermediário entre seu agente e o WhatsApp.
-
-**Opção A — Docker (mais fácil para desenvolvimento local):**
-
-```bash
-# Crie um arquivo docker-compose.yml com o conteúdo abaixo:
-```
-
-```yaml
-# docker-compose.yml
-version: '3.8'
-services:
-  evolution-api:
-    image: atendai/evolution-api:latest
-    ports:
-      - "8081:8080"
-    environment:
-      - SERVER_URL=http://localhost:8081
-      - AUTHENTICATION_API_KEY=minha-chave-secreta
-      - DATABASE_ENABLED=false
-      - REDIS_ENABLED=false
-    restart: unless-stopped
-```
-
-```bash
-docker-compose up -d
-# A Evolution API estará em http://localhost:8081
-# API Key: minha-chave-secreta
-```
-
-**Opção B — Hospedagem dedicada:**
-Serviços como Railway, Render ou VPS com Docker. Consulte a documentação oficial em [doc.evolution-api.com](https://doc.evolution-api.com).
+> Anote a **URL** e a **API Key** da Evolution API — você vai precisar no próximo passo.
 
 ---
 
@@ -736,74 +856,58 @@ IPNET_PORT=8080
 
 ---
 
-## ☁️ Deploy em produção (Google Cloud Run)
+## ☁️ Deploy no Google Cloud Run
 
-O Cloud Run é a forma mais simples de colocar o agente em produção no Google Cloud. Ele escala automaticamente e você paga apenas pelo uso.
+Com toda a infraestrutura criada (passos 3 a 9 da seção anterior), o deploy é feito com um único comando.
 
-### Pré-requisitos
+### Arquitetura final
 
-1. Conta no [Google Cloud](https://cloud.google.com) (tem créditos gratuitos para novos usuários)
-2. [gcloud CLI](https://cloud.google.com/sdk/docs/install) instalado
-3. Um projeto no Google Cloud criado
-
-### Passo 1 — Autenticar no Google Cloud
-
-```bash
-gcloud auth login
-gcloud config set project SEU_PROJECT_ID
+```
+Internet
+   │
+   ▼
+Cloud Run (seu agente Python)
+   │
+   ├─→ Cloud SQL Auth Proxy ──→ Cloud SQL PostgreSQL (histórico)
+   │
+   ├─→ VPC Connector ──────────→ Memorystore Redis (sessões)
+   │
+   └─→ Evolution API (externa) ─→ WhatsApp
 ```
 
-### Passo 2 — Criar o Cloud SQL (PostgreSQL gerenciado)
-
-```bash
-# Criar instância PostgreSQL
-gcloud sql instances create agentdb \
-  --database-version=POSTGRES_15 \
-  --tier=db-f1-micro \
-  --region=us-central1
-
-# Criar banco de dados
-gcloud sql databases create agentdb --instance=agentdb
-
-# Definir senha do postgres
-gcloud sql users set-password postgres \
-  --instance=agentdb \
-  --password=SUA_SENHA_SEGURA
-```
-
-### Passo 3 — Salvar credenciais no Secret Manager
-
-Nunca coloque senhas direto no comando de deploy. Use o Secret Manager:
-
-```bash
-# Criar secret com a URL do PostgreSQL
-echo -n "postgresql+asyncpg://postgres:SUA_SENHA@127.0.0.1:5432/agentdb" | \
-  gcloud secrets create ipnet-postgres-url --data-file=-
-
-# Criar secret com a chave do Gemini
-echo -n "AIzaSy..." | \
-  gcloud secrets create ipnet-gemini-key --data-file=-
-```
-
-### Passo 4 — Deploy com um comando
+### Passo 1 — Build e deploy
 
 ```bash
 whatsapp-agent deploy \
   --project-id SEU_PROJECT_ID \
   --region us-central1 \
   --service meu-agente \
-  --sql-instance SEU_PROJECT_ID:us-central1:agentdb
+  --sql-instance SEU_PROJECT_ID:us-central1:whatsapp-agent-db
 ```
 
-O comando vai:
-1. ✅ Fazer o build da imagem Docker via Cloud Build
-2. ✅ Publicar a imagem no Container Registry
-3. ✅ Deployar o serviço com o sidecar Cloud SQL Auth Proxy
-4. ✅ Retornar a URL pública do seu agente
+O comando faz automaticamente:
+1. ✅ Build da imagem Docker via Cloud Build
+2. ✅ Push para o Container Registry
+3. ✅ Deploy no Cloud Run com Cloud SQL Auth Proxy
+4. ✅ Retorna a URL pública do agente
 
-### Passo 5 — Configurar o webhook
+### Passo 2 — Conectar o Redis via VPC (complementar ao deploy)
 
-Após o deploy, você verá uma URL como:
+O comando `deploy` cuida do Cloud SQL, mas o Redis precisa ser configurado manualmente uma vez via `gcloud run services update`:
+
+```bash
+# Substituia 10.x.x.x pelo IP do Redis obtido no passo 6
+gcloud run services update meu-agente \
+  --region=us-central1 \
+  --vpc-connector=whatsapp-agent-connector \
+  --vpc-egress=private-ranges-only \
+  --update-env-vars="IPNET_REDIS_URL=redis://10.x.x.x:6379/0" \
+  --service-account=whatsapp-agent-sa@SEU_PROJECT_ID.iam.gserviceaccount.com
+```
+
+### Passo 3 — Configurar o webhook na Evolution API
+
+Após o deploy, você verá no terminal:
 ```
 ✓ Agente online: https://meu-agente-xyz.run.app
 
@@ -811,19 +915,37 @@ Configure o webhook da Evolution API para:
   https://meu-agente-xyz.run.app/webhook/meu-agente
 ```
 
-Configure essa URL na sua Evolution API e pronto!
+Configure essa URL na sua instância da Evolution API e o agente começa a receber mensagens.
 
-### Arquitetura do deploy
+### Passo 4 — Verificar se tudo está funcionando
 
+```bash
+# Ver logs do Cloud Run em tempo real
+gcloud run services logs tail meu-agente --region=us-central1
+
+# Verificar estado do Cloud SQL
+gcloud sql instances describe whatsapp-agent-db \
+  --format='value(state)'
+# Deve retornar: RUNNABLE
+
+# Verificar estado do Redis
+gcloud redis instances describe whatsapp-agent-redis \
+  --region=us-central1 \
+  --format='value(state)'
+# Deve retornar: READY
 ```
-Internet → Cloud Run (seu agente)
-                │
-                └─→ Cloud SQL Auth Proxy (sidecar) → Cloud SQL PostgreSQL
-                └─→ Redis (Memorystore ou externo)
-                └─→ Evolution API (seu servidor ou terceiro)
-```
 
-> O **Cloud SQL Auth Proxy** é um container auxiliar que roda junto com o seu agente e gerencia a conexão segura com o banco de dados sem expor portas para a internet.
+### Custos estimados (GCP)
+
+| Serviço | Tier | Custo estimado |
+|---------|------|----------------|
+| Cloud Run | Escala para zero | ~$0–5/mês (baixo volume) |
+| Cloud SQL | `db-f1-micro` | ~$7/mês |
+| Memorystore Redis | 1GB Basic | ~$35/mês |
+| VPC Connector | `e2-micro` x2 | ~$15/mês |
+| Cloud Build | 120 min/dia grátis | ~$0/mês |
+
+> O Memorystore tem custo fixo mesmo sem uso. Para projetos em fase inicial, você pode usar um Redis externo (ex: [Upstash](https://upstash.com) tem plano gratuito) e pular os passos 6 e 7.
 
 ---
 
@@ -1156,32 +1278,54 @@ ERROR: pip's dependency resolver does not currently take into account...
 
 Isso é apenas um **aviso**, não um erro. O pacote foi instalado corretamente. Acontece quando há outros pacotes instalados globalmente que têm versões conflitantes. O ambiente virtual isola o seu projeto e o agente funcionará normalmente.
 
-### `Connection refused` no Redis
+### Erro de conexão com o Redis (Memorystore)
 
-O Redis não está rodando:
+O Cloud Run não consegue atingir o Redis. Verifique:
+
+1. O VPC Connector está com `state: READY`?
 ```bash
-# macOS
-brew services start redis
-
-# Linux
-sudo systemctl start redis
-
-# Verificar
-redis-cli ping   # deve retornar PONG
+gcloud compute networks vpc-access connectors describe whatsapp-agent-connector \
+  --region=us-central1 --format='value(state)'
+# Deve retornar: READY
 ```
 
-### `could not connect to server` no PostgreSQL
-
-O PostgreSQL não está rodando ou a URL está errada:
+2. O `--vpc-connector` foi aplicado ao serviço?
 ```bash
-# macOS
-brew services start postgresql@15
+gcloud run services describe meu-agente \
+  --region=us-central1 \
+  --format='value(spec.template.metadata.annotations)'
+# Deve conter: run.googleapis.com/vpc-access-connector
+```
 
-# Linux
-sudo systemctl start postgresql
+3. O IP do Redis na variável `IPNET_REDIS_URL` está correto?
+```bash
+gcloud redis instances describe whatsapp-agent-redis \
+  --region=us-central1 --format='value(host)'
+```
 
-# Testar conexão:
-psql postgresql://postgres:suasenha@localhost:5432/agentdb -c "SELECT 1;"
+### Erro de conexão com o PostgreSQL (Cloud SQL)
+
+1. O connection name está correto?
+```bash
+gcloud sql instances describe whatsapp-agent-db \
+  --format='value(connectionName)'
+# Formato: SEU_PROJECT_ID:us-central1:whatsapp-agent-db
+```
+
+2. A service account tem permissão `roles/cloudsql.client`?
+```bash
+gcloud projects get-iam-policy SEU_PROJECT_ID \
+  --flatten="bindings[].members" \
+  --filter="bindings.members:whatsapp-agent-sa" \
+  --format='table(bindings.role)'
+```
+
+3. O `--add-cloudsql-instances` foi passado no deploy?
+```bash
+gcloud run services describe meu-agente \
+  --region=us-central1 \
+  --format='value(spec.template.metadata.annotations)'
+# Deve conter: run.googleapis.com/cloudsql-instances
 ```
 
 ### QR Code não aparece ou dá erro 404
