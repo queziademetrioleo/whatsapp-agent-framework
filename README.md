@@ -9,12 +9,8 @@
 - [O que é isso?](#-o-que-é-isso)
 - [Como funciona por dentro?](#-como-funciona-por-dentro)
 - [O que você vai precisar](#-o-que-você-vai-precisar)
-- [Instalação passo a passo](#-instalação-passo-a-passo)
-  - [1. Python](#1-instalar-o-python)
-  - [2. Redis](#2-instalar-o-redis)
-  - [3. PostgreSQL](#3-instalar-o-postgresql)
-  - [4. Evolution API](#4-configurar-a-evolution-api)
-  - [5. O pacote](#5-instalar-o-pacote)
+- [🔐 IAM — Roles necessárias no GCP](#-iam--roles-necessárias-no-gcp) ← **leia antes de começar**
+- [Configuração passo a passo](#-configuração-passo-a-passo)
 - [Seu primeiro agente](#-seu-primeiro-agente)
 - [Entendendo o system prompt](#-entendendo-o-system-prompt)
 - [Adicionando ferramentas (Tools)](#-adicionando-ferramentas-tools)
@@ -116,6 +112,195 @@ Sem o debouncer, o agente responderia 4 vezes, uma para cada mensagem, causando 
 | Um número de WhatsApp | Seu chip | Para o agente operar |
 
 > **Toda a infraestrutura de banco, cache e servidor fica no GCP.** Você não instala Redis nem PostgreSQL na sua máquina — apenas o Python para escrever o código.
+
+---
+
+## 🔐 IAM — Roles necessárias no GCP
+
+> **Leia isso antes de começar.** Sem as permissões certas, qualquer passo da configuração vai falhar. Este mapeamento cobre as três identidades que precisam de acesso no GCP.
+
+Existem **três identidades** que precisam de permissões diferentes no GCP. Entender isso evita os erros mais frustrantes do deploy.
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  1. Sua conta Google (desenvolvedor)                    │
+│     Roda os comandos gcloud para criar infraestrutura   │
+├─────────────────────────────────────────────────────────┤
+│  2. whatsapp-agent-sa (Service Account do Cloud Run)    │
+│     Identidade do agente em produção                    │
+├─────────────────────────────────────────────────────────┤
+│  3. Cloud Build SA (criada automaticamente pelo GCP)    │
+│     Roda o build e faz o deploy da imagem               │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Identidade 1 — Sua conta de desenvolvedor
+
+Roles mínimas para rodar todos os comandos de infraestrutura deste guia:
+
+```bash
+# Substitua developer@suaempresa.com pelo seu e-mail do GCP
+DEVELOPER="developer@suaempresa.com"
+PROJECT="SEU_PROJECT_ID"
+
+gcloud projects add-iam-policy-binding $PROJECT --member="user:$DEVELOPER" --role="roles/servicemanagement.admin"
+gcloud projects add-iam-policy-binding $PROJECT --member="user:$DEVELOPER" --role="roles/iam.serviceAccountAdmin"
+gcloud projects add-iam-policy-binding $PROJECT --member="user:$DEVELOPER" --role="roles/resourcemanager.projectIamAdmin"
+gcloud projects add-iam-policy-binding $PROJECT --member="user:$DEVELOPER" --role="roles/cloudsql.admin"
+gcloud projects add-iam-policy-binding $PROJECT --member="user:$DEVELOPER" --role="roles/redis.admin"
+gcloud projects add-iam-policy-binding $PROJECT --member="user:$DEVELOPER" --role="roles/compute.networkAdmin"
+gcloud projects add-iam-policy-binding $PROJECT --member="user:$DEVELOPER" --role="roles/secretmanager.admin"
+gcloud projects add-iam-policy-binding $PROJECT --member="user:$DEVELOPER" --role="roles/cloudbuild.builds.editor"
+gcloud projects add-iam-policy-binding $PROJECT --member="user:$DEVELOPER" --role="roles/run.admin"
+gcloud projects add-iam-policy-binding $PROJECT --member="user:$DEVELOPER" --role="roles/iam.serviceAccountUser"
+```
+
+O que cada role permite:
+
+| Role | O que permite | Qual comando usa |
+|------|--------------|-----------------|
+| `roles/servicemanagement.admin` | Ativar APIs (`gcloud services enable`) | Passo 3 |
+| `roles/iam.serviceAccountAdmin` | Criar a Service Account | Passo 4 |
+| `roles/resourcemanager.projectIamAdmin` | Conceder roles a outros via `add-iam-policy-binding` | Passos 4 e 8 |
+| `roles/cloudsql.admin` | Criar instância, banco, usuário no Cloud SQL | Passo 5 |
+| `roles/redis.admin` | Criar instância do Memorystore | Passo 6 |
+| `roles/compute.networkAdmin` | Criar o VPC Connector | Passo 7 |
+| `roles/secretmanager.admin` | Criar e gerenciar secrets | Passo 8 |
+| `roles/cloudbuild.builds.editor` | Disparar builds via `gcloud builds submit` | Deploy |
+| `roles/run.admin` | Criar e atualizar serviços no Cloud Run | Deploy |
+| `roles/iam.serviceAccountUser` | Fazer deploy com `--service-account` | Deploy |
+
+> **Não tem acesso para se dar essas roles?** Peça para o administrador do projeto executar o bloco acima com a sua conta. Se o projeto for seu, sua conta provavelmente já é `roles/owner` e pode pular esse passo.
+
+---
+
+### Identidade 2 — Service Account do Cloud Run
+
+Esta é a identidade que o agente usa em produção para acessar o banco, o Redis e os secrets.
+
+> 💡 **Dica:** Use o comando `whatsapp-agent setup-sa` para criar a SA e atribuir todas as roles abaixo automaticamente, com o nome gerado a partir do seu nome e do projeto.
+
+```bash
+SA="whatsapp-agent-sa@SEU_PROJECT_ID.iam.gserviceaccount.com"
+PROJECT="SEU_PROJECT_ID"
+
+# OBRIGATÓRIO — conectar ao Cloud SQL em runtime
+gcloud projects add-iam-policy-binding $PROJECT \
+  --member="serviceAccount:$SA" --role="roles/cloudsql.client"
+
+# OBRIGATÓRIO — ler secrets em runtime (Gemini key, Redis URL, DB password)
+gcloud projects add-iam-policy-binding $PROJECT \
+  --member="serviceAccount:$SA" --role="roles/secretmanager.secretAccessor"
+
+# RECOMENDADO — acesso de leitura/escrita ao Memorystore
+gcloud projects add-iam-policy-binding $PROJECT \
+  --member="serviceAccount:$SA" --role="roles/redis.editor"
+
+# OBRIGATÓRIO — gravar logs no Cloud Logging
+gcloud projects add-iam-policy-binding $PROJECT \
+  --member="serviceAccount:$SA" --role="roles/logging.logWriter"
+```
+
+| Role | Por que é necessária | Erro se faltar |
+|------|---------------------|----------------|
+| `roles/cloudsql.client` | Cloud SQL Auth Proxy usa para autenticar a conexão | `Cloud SQL client does not have permission to access the instance` |
+| `roles/secretmanager.secretAccessor` | Lê as variáveis sensíveis no startup | Agente sobe sem as credenciais — falha silenciosa |
+| `roles/redis.editor` | Escreve sessões ativas no Memorystore | Timeout ao tentar salvar sessão |
+| `roles/logging.logWriter` | Envia logs para o Cloud Logging | Logs não aparecem no console do GCP |
+
+---
+
+### Identidade 3 — Cloud Build Service Account
+
+O Cloud Build cria automaticamente uma SA no formato `[PROJECT_NUMBER]@cloudbuild.gserviceaccount.com`. Ela precisa de permissão para fazer deploy no Cloud Run e publicar a imagem Docker.
+
+**Pegar o número do projeto:**
+```bash
+gcloud projects describe SEU_PROJECT_ID --format='value(projectNumber)'
+# Exemplo de saída: 123456789012
+```
+
+**Conceder as roles:**
+```bash
+PROJECT_NUMBER=$(gcloud projects describe SEU_PROJECT_ID --format='value(projectNumber)')
+CB_SA="${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com"
+
+# OBRIGATÓRIO — fazer deploy no Cloud Run
+gcloud projects add-iam-policy-binding SEU_PROJECT_ID \
+  --member="serviceAccount:$CB_SA" --role="roles/run.admin"
+
+# OBRIGATÓRIO — publicar imagem Docker no Container Registry
+gcloud projects add-iam-policy-binding SEU_PROJECT_ID \
+  --member="serviceAccount:$CB_SA" --role="roles/storage.admin"
+
+# OBRIGATÓRIO — fazer deploy usando a SA do agente (--service-account no deploy)
+gcloud iam service-accounts add-iam-policy-binding \
+  whatsapp-agent-sa@SEU_PROJECT_ID.iam.gserviceaccount.com \
+  --member="serviceAccount:$CB_SA" \
+  --role="roles/iam.serviceAccountUser"
+```
+
+| Role | Por que é necessária | Erro se faltar |
+|------|---------------------|----------------|
+| `roles/run.admin` | O Cloud Build deploya o serviço no final do build | `Build step failed: run.services.create permission denied` |
+| `roles/storage.admin` | Push da imagem para `gcr.io/SEU_PROJECT_ID/...` | `denied: requested access to the resource is denied` |
+| `roles/iam.serviceAccountUser` | Permite usar `--service-account` no deploy | `The caller does not have permission to act as the service account` |
+
+---
+
+### Visão consolidada — todas as roles de uma vez
+
+```
+Sua conta (desenvolvedor)
+├── roles/servicemanagement.admin
+├── roles/iam.serviceAccountAdmin
+├── roles/resourcemanager.projectIamAdmin
+├── roles/cloudsql.admin
+├── roles/redis.admin
+├── roles/compute.networkAdmin
+├── roles/secretmanager.admin
+├── roles/cloudbuild.builds.editor
+├── roles/run.admin
+└── roles/iam.serviceAccountUser
+
+whatsapp-agent-sa (runtime)
+├── roles/cloudsql.client          ← OBRIGATÓRIO
+├── roles/secretmanager.secretAccessor  ← OBRIGATÓRIO
+├── roles/redis.editor             ← RECOMENDADO
+└── roles/logging.logWriter        ← RECOMENDADO
+
+Cloud Build SA (build/deploy)
+├── roles/run.admin                ← OBRIGATÓRIO
+├── roles/storage.admin            ← OBRIGATÓRIO
+└── roles/iam.serviceAccountUser   ← OBRIGATÓRIO
+```
+
+---
+
+### Como verificar as roles atuais de qualquer identidade
+
+```bash
+# Ver roles da sua conta
+gcloud projects get-iam-policy SEU_PROJECT_ID \
+  --flatten="bindings[].members" \
+  --filter="bindings.members:developer@suaempresa.com" \
+  --format="table(bindings.role)"
+
+# Ver roles da Service Account do agente
+gcloud projects get-iam-policy SEU_PROJECT_ID \
+  --flatten="bindings[].members" \
+  --filter="bindings.members:whatsapp-agent-sa@SEU_PROJECT_ID.iam.gserviceaccount.com" \
+  --format="table(bindings.role)"
+
+# Ver roles da Cloud Build SA
+PROJECT_NUMBER=$(gcloud projects describe SEU_PROJECT_ID --format='value(projectNumber)')
+gcloud projects get-iam-policy SEU_PROJECT_ID \
+  --flatten="bindings[].members" \
+  --filter="bindings.members:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+  --format="table(bindings.role)"
+```
 
 ---
 
