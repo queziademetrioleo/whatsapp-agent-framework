@@ -19,9 +19,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-# deploy e scaffold não dependem de agno/google-genai — import direto é seguro
+# deploy, scaffold e setup não dependem de agno/google-genai — import direto é seguro
 from whatsapp_agent_ipnet.cli.deploy import run_deploy
 from whatsapp_agent_ipnet.cli.scaffold import run_init
+from whatsapp_agent_ipnet.cli.setup import run_setup_sa
 
 app = typer.Typer(
     name="whatsapp-agent",
@@ -63,6 +64,14 @@ def deploy(
         skip_push=skip_push,
         console=console,
     )
+
+
+@app.command(name="setup-sa")
+def setup_sa(
+    project_id: str = typer.Option(None, "--project-id", "-p", help="Google Cloud Project ID"),
+) -> None:
+    """Cria a Service Account do agente no GCP de forma interativa."""
+    run_setup_sa(project_id=project_id, console=console)
 
 
 @app.command()
