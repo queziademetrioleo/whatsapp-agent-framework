@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "whatsapp-agent-ipnet"
+version = "0.1.0"
+description = "Framework Python para deployar agentes de IA no WhatsApp em menos de 24h"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "IPNET", email = "contato@ipnet.com.br" }]
+keywords = ["whatsapp", "ai", "agent", "gemini", "evolution-api", "chatbot"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    # Agent framework
+    "agno>=1.4.0",
+    # LLM
+    "google-genai>=1.0.0",
+    # Web server / webhook
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "httpx>=0.27.0",
+    # Memory
+    "asyncpg>=0.29.0",
+    "sqlalchemy[asyncio]>=2.0.0",
+    "redis[hiredis]>=5.0.0",
+    "psycopg[binary,pool]>=3.1.0",
+    # CLI
+    "typer>=0.12.0",
+    "rich>=13.0.0",
+    # Utils
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "python-dotenv>=1.0.0",
+    "tenacity>=8.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-httpx>=0.30.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+]
+
+[project.scripts]
+whatsapp-agent = "whatsapp_agent_ipnet.cli.main:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["whatsapp_agent_ipnet*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

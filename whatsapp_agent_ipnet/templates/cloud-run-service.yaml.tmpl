@@ -1,0 +1,99 @@
+# Cloud Run Service com sidecar Cloud SQL Auth Proxy
+# Substitua os placeholders antes de aplicar:
+#   {{PROJECT_ID}}          - Google Cloud Project ID
+#   {{REGION}}              - Região (ex: us-central1)
+#   {{SERVICE_NAME}}        - Nome do serviço Cloud Run
+#   {{IMAGE}}               - gcr.io/PROJECT_ID/SERVICE_NAME:latest
+#   {{SQL_INSTANCE}}        - PROJECT_ID:REGION:INSTANCE_NAME
+#   {{SERVICE_ACCOUNT}}     - service-account@project.iam.gserviceaccount.com
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: "{{SERVICE_NAME}}"
+  annotations:
+    run.googleapis.com/launch-stage: BETA  # Necessário para múltiplos containers
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "10"
+        run.googleapis.com/execution-environment: gen2
+        # Lista de instâncias Cloud SQL (alternativa ao sidecar)
+        # run.googleapis.com/cloudsql-instances: "{{SQL_INSTANCE}}"
+    spec:
+      serviceAccountName: "{{SERVICE_ACCOUNT}}"
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      containers:
+
+        # ─── Container principal (agente) ─────────────────────────────────
+        - name: agent
+          image: "{{IMAGE}}"
+          ports:
+            - name: http1
+              containerPort: 8080
+          env:
+            - name: IPNET_POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ipnet-secrets
+                  key: postgres-url
+            - name: IPNET_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: ipnet-secrets
+                  key: redis-url
+            - name: IPNET_GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ipnet-secrets
+                  key: gemini-api-key
+            - name: IPNET_EVOLUTION_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ipnet-secrets
+                  key: evolution-api-key
+            - name: IPNET_EVOLUTION_API_URL
+              value: "https://evolution.seudominio.com"
+            - name: IPNET_INSTANCE_NAME
+              value: "{{SERVICE_NAME}}"
+            - name: DB_HOST
+              value: "127.0.0.1"
+          resources:
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+          startupProbe:
+            httpGet:
+              path: /webhook/health
+              port: 8080
+            initialDelaySeconds: 10
+            timeoutSeconds: 5
+            periodSeconds: 5
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              path: /webhook/health
+              port: 8080
+            initialDelaySeconds: 0
+            periodSeconds: 30
+            timeoutSeconds: 5
+
+        # ─── Sidecar: Cloud SQL Auth Proxy ────────────────────────────────
+        - name: cloud-sql-proxy
+          image: gcr.io/cloudsql-docker/cloud-sql-proxy:2
+          args:
+            - "--structured-logs"
+            - "--port=5432"
+            - "{{SQL_INSTANCE}}"
+          securityContext:
+            runAsNonRoot: true
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
