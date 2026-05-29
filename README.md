@@ -254,6 +254,74 @@ gcloud sql instances describe whatsapp-agent-db \
 > - `db-g1-small` — ~$25/mês, para produção com volume médio
 > - `db-custom-2-8192` — 2 vCPU + 8GB RAM, para alto volume
 
+#### As tabelas são criadas automaticamente
+
+O framework cria todas as tabelas necessárias na primeira vez que o agente sobe. Você **não precisa rodar nenhum SQL manualmente** para começar.
+
+As tabelas criadas automaticamente são:
+
+| Tabela | Criada por | Para que serve |
+|--------|-----------|----------------|
+| `ipnet_conversation_history` | `ConversationHistory.setup()` | Histórico de mensagens por número |
+| `ipnet_agno_sessions` | `PostgresStorage` do Agno | Estado interno do agente (memória do loop) |
+
+#### Como conectar no Cloud SQL via terminal (quando precisar)
+
+Para verificar tabelas, rodar SQL manual ou importar dados existentes, use o `gcloud sql connect`:
+
+```bash
+# Conectar diretamente no banco via terminal
+# (requer que o Cloud SQL Auth Proxy esteja instalado — o gcloud instala automaticamente)
+gcloud sql connect whatsapp-agent-db \
+  --user=agentuser \
+  --database=agentdb
+# Vai pedir a senha que você definiu no passo anterior
+```
+
+Dentro do `psql`, você pode rodar qualquer SQL:
+
+```sql
+-- Ver tabelas criadas pelo framework
+\dt
+
+-- Ver histórico de conversas
+SELECT phone, role, content, created_at
+FROM ipnet_conversation_history
+ORDER BY created_at DESC
+LIMIT 20;
+
+-- Contar mensagens por número
+SELECT phone, COUNT(*) as total
+FROM ipnet_conversation_history
+GROUP BY phone
+ORDER BY total DESC;
+
+-- Sair do psql
+\q
+```
+
+#### Importar dados de um banco existente
+
+Se você já tem um banco PostgreSQL com dados e quer migrar para o Cloud SQL:
+
+```bash
+# 1. Exportar do banco atual (na sua máquina ou servidor antigo)
+pg_dump -U usuario -d banco_atual -f backup.sql
+
+# 2. Enviar o arquivo para o Cloud Storage
+gsutil cp backup.sql gs://SEU_PROJECT_ID-backups/backup.sql
+
+# 3. Importar no Cloud SQL
+gcloud sql import sql whatsapp-agent-db \
+  gs://SEU_PROJECT_ID-backups/backup.sql \
+  --database=agentdb
+```
+
+> Se não tiver um bucket no Cloud Storage ainda:
+> ```bash
+> gsutil mb -l us-central1 gs://SEU_PROJECT_ID-backups
+> ```
+
 ---
 
 ### 6. Criar o Memorystore — Redis (cache de sessão)
