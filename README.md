@@ -245,22 +245,64 @@ Serviços como Railway, Render ou VPS com Docker. Consulte a documentação ofic
 
 ### 5. Instalar o pacote
 
-**Recomendamos criar um ambiente virtual Python** (isola as dependências do projeto):
+> 💡 **Todo esse processo é feito no terminal do VS Code.** Abra com `Ctrl + `` ` `` ` (backtick) ou pelo menu **Terminal → New Terminal**.
+
+#### Passo 1 — Criar uma pasta para o projeto e abrir no VS Code
 
 ```bash
-# Criar ambiente virtual
-python3 -m venv .venv
-
-# Ativar o ambiente virtual
-# No macOS/Linux:
-source .venv/bin/activate
-# No Windows:
-.venv\Scripts\activate
-
-# Você verá (.venv) no início da linha do terminal quando ativado
+# Crie e entre na pasta onde ficará seu agente
+mkdir meus-agentes
+cd meus-agentes
+code .
 ```
 
-**Instalar o framework:**
+O VS Code vai abrir. A partir daqui, use o terminal integrado dele (**Ctrl + `` ` ``**).
+
+#### Passo 2 — Criar um ambiente virtual isolado
+
+O ambiente virtual evita conflitos com outros pacotes Python instalados no seu computador.
+
+```bash
+# No terminal do VS Code:
+python3 -m venv .venv
+```
+
+#### Passo 3 — Ativar o ambiente virtual
+
+**macOS/Linux:**
+```bash
+source .venv/bin/activate
+```
+
+**Windows (PowerShell):**
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+**Windows (CMD):**
+```cmd
+.venv\Scripts\activate.bat
+```
+
+Quando ativado corretamente, você verá **`(.venv)`** no início da linha do terminal:
+```
+(.venv) Usuario@MacBook meus-agentes %
+```
+
+> ⚠️ **Importante:** Sempre que abrir um novo terminal no VS Code, você precisa ativar o ambiente virtual novamente com o comando acima. O VS Code pode fazer isso automaticamente — veja abaixo.
+
+#### Passo 4 — Configurar o VS Code para ativar automaticamente
+
+1. Pressione `Ctrl+Shift+P` (ou `Cmd+Shift+P` no Mac)
+2. Digite **"Python: Select Interpreter"**
+3. Selecione a opção que mostra **`.venv`** na lista (ex: `Python 3.11.x ('.venv')`)
+
+Pronto — o VS Code vai ativar o `.venv` automaticamente em todo novo terminal.
+
+#### Passo 5 — Instalar o framework
+
+Com o ambiente virtual **ativado** (veja o `(.venv)` no terminal):
+
 ```bash
 pip install whatsapp-agent-ipnet
 ```
@@ -271,9 +313,13 @@ whatsapp-agent --help
 # Deve mostrar os comandos disponíveis
 ```
 
+> **Conflitos de versão?** Se aparecer um aviso `ERROR: pip's dependency resolver...`, pode ignorar com segurança. São avisos sobre outros pacotes instalados globalmente, não afetam o funcionamento do framework.
+
 ---
 
 ## 🛠️ Seu primeiro agente
+
+> Todos os comandos abaixo são executados no **terminal do VS Code** (`Ctrl + `` ` ```) com o ambiente virtual **ativado** (você deve ver `(.venv)` no início da linha).
 
 ### Passo 1 — Criar o projeto
 
@@ -281,6 +327,8 @@ whatsapp-agent --help
 whatsapp-agent init meu-primeiro-agente
 cd meu-primeiro-agente
 ```
+
+> Após o `cd`, o VS Code pode perguntar se deseja abrir a pasta no explorer — clique em **"Sim"** para navegar pelos arquivos pelo painel lateral.
 
 Isso vai criar a seguinte estrutura:
 ```
@@ -1065,11 +1113,48 @@ O risco existe em qualquer integração não-oficial. Recomendações para minim
 
 ### `ModuleNotFoundError: No module named 'whatsapp_agent_ipnet'`
 
-O ambiente virtual não está ativado ou o pacote não foi instalado:
+O ambiente virtual não está ativado ou o pacote não foi instalado. No terminal do VS Code:
 ```bash
-source .venv/bin/activate   # ativar o ambiente virtual
+source .venv/bin/activate        # macOS/Linux
+# ou
+.venv\Scripts\Activate.ps1       # Windows PowerShell
+
 pip install whatsapp-agent-ipnet
 ```
+
+### O terminal do VS Code não mostra `(.venv)` ao abrir
+
+O interpretador Python não foi selecionado corretamente:
+1. `Ctrl+Shift+P` → **"Python: Select Interpreter"**
+2. Escolha a opção com `.venv` na lista
+3. Feche o terminal (`Ctrl+`` ` ``) e abra um novo
+
+Se `.venv` não aparecer na lista:
+```bash
+python3 -m venv .venv
+```
+E repita os passos acima.
+
+### `pip install` instala mas `whatsapp-agent` não é encontrado
+
+O executável foi instalado no ambiente errado. Certifique-se de que o `(.venv)` está visível antes de instalar:
+```bash
+# Verificar qual pip está sendo usado:
+which pip      # macOS/Linux — deve mostrar um caminho com .venv
+where pip      # Windows — deve mostrar um caminho com .venv
+
+# Se não estiver no .venv, ative e reinstale:
+source .venv/bin/activate
+pip install --force-reinstall whatsapp-agent-ipnet
+```
+
+### Aviso `dependency resolver` ao instalar
+
+```
+ERROR: pip's dependency resolver does not currently take into account...
+```
+
+Isso é apenas um **aviso**, não um erro. O pacote foi instalado corretamente. Acontece quando há outros pacotes instalados globalmente que têm versões conflitantes. O ambiente virtual isola o seu projeto e o agente funcionará normalmente.
 
 ### `Connection refused` no Redis
 
